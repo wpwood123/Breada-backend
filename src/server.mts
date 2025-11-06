@@ -125,6 +125,7 @@ app.post(
   '/api/users-create',
   verifyFirebaseToken,
   async (req: AuthenticatedRequest, res: Response) => {
+    console.log("POST api/users-create Request: \n", req.body);
     try {
       const {
         name,
@@ -155,6 +156,7 @@ app.post(
       // ✅ Create user in Prisma
       const user = await prisma.user.create({
         data: {
+          firebaseUid: req.user!.uid,
           name,
           email,
           phone,
@@ -166,15 +168,20 @@ app.post(
         },
       });
 
-      // ✅ Optional audit log entry
-      await prisma.auditLog.create({
-        data: {
-          userId: req.user?.uid,
-          action: 'create_user',
-          entity: 'user',
-          entityId: user.id,
-          details: { createdRole: role },
-        },
+      // Find the current logged-in Prisma user
+const actingUser = await prisma.user.findUnique({
+  where: { firebaseUid: req.user?.uid },
+  select: { id: true },
+});
+
+await prisma.auditLog.create({
+  data: {
+    userId: actingUser?.id ?? user.id, // fallback if user just created themselves
+    action: 'create_user',
+    entity: 'user',
+    entityId: user.id,
+    details: { createdRole: role },
+  },
       });
 
       return res.status(201).json({
@@ -252,9 +259,82 @@ app.get(
 // -------------------------------------------------------
 
 // -------------------------------------------------------
-// TODO: POST /api/child
+// TODO: POST /api/create-child
 // Creates a new child record in the database
 // -------------------------------------------------------
+app.post(
+  '/api/users-create',
+  verifyFirebaseToken,
+  async (req: AuthenticatedRequest, res: Response) => {
+    console.log("POST api/users-create Request: \n", req.body);
+    try {
+      const {
+        name,
+        email,
+        phone,
+        role = 'parent',
+        street,
+        city,
+        state,
+        zipCode,
+      } = req.body;
+
+      if (!email || !name) {
+        return res.status(400).json({ error: 'Missing required fields: email, name' });
+      }
+
+      // ✅ Only admins can create non-parent roles
+      if (role !== 'parent' && req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Only admins can assign non-parent roles' });
+      }
+
+      // ✅ Check if user already exists
+      const existing = await prisma.user.findUnique({ where: { email } });
+      if (existing) {
+        return res.status(409).json({ error: 'User already exists' });
+      }
+
+      // ✅ Create user in Prisma
+      const user = await prisma.user.create({
+        data: {
+          firebaseUid: req.user!.uid,
+          name,
+          email,
+          phone,
+          role,
+          street,
+          city,
+          state,
+          zipCode,
+        },
+      });
+
+      // Find the current logged-in Prisma user
+const actingUser = await prisma.user.findUnique({
+  where: { firebaseUid: req.user?.uid },
+  select: { id: true },
+});
+
+await prisma.auditLog.create({
+  data: {
+    userId: actingUser?.id ?? user.id, // fallback if user just created themselves
+    action: 'create_user',
+    entity: 'user',
+    entityId: user.id,
+    details: { createdRole: role },
+  },
+      });
+
+      return res.status(201).json({
+        message: 'User created successfully',
+        user,
+      });
+    } catch (err) {
+      console.error('Error creating user:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
 
 // -------------------------------------------------------
 // TODO: POST /api/child-update

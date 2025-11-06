@@ -1,8 +1,3 @@
-// ======================================================
-//  Breada Prisma Schema (Updated)
-//  Database: PostgreSQL
-// ======================================================
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -12,9 +7,114 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ======================================================
-// ENUMS
-// ======================================================
+model User {
+  id               String              @id @default(uuid())
+  firebaseUid      String              @unique
+  name             String
+  email            String              @unique
+  phone            String?
+  role             UserRole            @default(parent)
+  street           String?
+  city             String?
+  state            String?
+  zipCode          String?
+  accountCreatedAt DateTime            @default(now())
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  auditLogs        AuditLog[]
+  checkins         Checkin[]           @relation("VolunteerCheckins")
+  children         Child[]             @relation("ParentChildren")
+  deposits         TokenDeposit[]
+  vendorTurnins    VendorTokenTurnin[] @relation("VendorTurnins")
+  verifiedTurnins  VendorTokenTurnin[] @relation("VerifiedTurnins")
+}
+
+model Child {
+  id             String         @id @default(uuid())
+  parentId       String
+  name           String
+  qrCode         String         @unique
+  createdAt      DateTime       @default(now())
+  dateOfBirth    DateTime?
+  timesCheckedIn Int            @default(0)
+  parentName     String?
+  gender         Gender
+  balance        Balance?
+  checkins       Checkin[]
+  parent         User           @relation("ParentChildren", fields: [parentId], references: [id])
+  deposits       TokenDeposit[]
+  transactions   Transaction[]
+
+  @@index([parentId])
+}
+
+model Balance {
+  id          String    @id @default(uuid())
+  childId     String    @unique
+  amountCents Int       @default(0)
+  lastCheckin DateTime?
+  updatedAt   DateTime  @default(now())
+  child       Child     @relation(fields: [childId], references: [id])
+}
+
+model Checkin {
+  id          String   @id @default(uuid())
+  childId     String
+  volunteerId String?
+  checkinTime DateTime @default(now())
+  checkinDate DateTime
+  child       Child    @relation(fields: [childId], references: [id])
+  volunteer   User?    @relation("VolunteerCheckins", fields: [volunteerId], references: [id])
+
+  @@unique([childId, checkinDate])
+  @@index([childId])
+}
+
+model Transaction {
+  id          String          @id @default(uuid())
+  childId     String
+  type        TransactionType
+  amountCents Int
+  description String?
+  createdAt   DateTime        @default(now())
+  child       Child           @relation(fields: [childId], references: [id])
+
+  @@index([childId])
+}
+
+model TokenDeposit {
+  id             String   @id @default(uuid())
+  childId        String
+  volunteerId    String?
+  tokensReturned Int
+  createdAt      DateTime @default(now())
+  child          Child    @relation(fields: [childId], references: [id])
+  volunteer      User?    @relation(fields: [volunteerId], references: [id])
+
+  @@index([childId])
+}
+
+model VendorTokenTurnin {
+  id              String   @id @default(uuid())
+  vendorId        String
+  tokensSubmitted Int
+  marketDate      DateTime
+  verifiedBy      String?
+  createdAt       DateTime @default(now())
+  vendor          User     @relation("VendorTurnins", fields: [vendorId], references: [id])
+  verifiedByUser  User?    @relation("VerifiedTurnins", fields: [verifiedBy], references: [id])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String
+  entity    String?
+  entityId  String?
+  details   Json?
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id])
+}
 
 enum UserRole {
   parent
@@ -29,129 +129,8 @@ enum TransactionType {
   deposit
 }
 
-// ======================================================
-// MODELS
-// TODO: Update table schema so that vendors are not a user type but their own thing like children
-// ======================================================
-
-model User {
-  id    String   @id @default(uuid())
-  name  String
-  email String   @unique
-  phone String?
-  role  UserRole @default(parent)
-
-  // New address fields
-  street  String?
-  city    String?
-  state   String?
-  zipCode String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relationships
-  children        Child[]             @relation("ParentChildren")
-  checkins        Checkin[]           @relation("VolunteerCheckins")
-  deposits        TokenDeposit[]
-  vendorTurnins   VendorTokenTurnin[] @relation("VendorTurnins")
-  verifiedTurnins VendorTokenTurnin[] @relation("VerifiedTurnins")
-  auditLogs       AuditLog[]
-}
-
-model Child {
-  id        String   @id @default(uuid())
-  parentId  String
-  name      String
-  qrCode    String   @unique
-  createdAt DateTime @default(now())
-
-  // New fields for children
-  dateOfBirth    DateTime?
-  timesCheckedIn Int       @default(0)
-  parentName     String? // Useful for display in reports
-
-  // Relationships
-  parent       User           @relation("ParentChildren", fields: [parentId], references: [id])
-  balance      Balance?
-  transactions Transaction[]
-  checkins     Checkin[]
-  deposits     TokenDeposit[]
-
-  @@index([parentId])
-}
-
-model Balance {
-  id          String    @id @default(uuid())
-  childId     String    @unique
-  amountCents Int       @default(0)
-  lastCheckin DateTime?
-  updatedAt   DateTime  @default(now())
-
-  child Child @relation(fields: [childId], references: [id])
-}
-
-model Checkin {
-  id          String   @id @default(uuid())
-  childId     String
-  volunteerId String?
-  checkinTime DateTime @default(now())
-  checkinDate DateTime
-
-  // Relationships
-  child     Child @relation(fields: [childId], references: [id])
-  volunteer User? @relation("VolunteerCheckins", fields: [volunteerId], references: [id])
-
-  @@unique([childId, checkinDate])
-  @@index([childId])
-}
-
-model Transaction {
-  id          String          @id @default(uuid())
-  childId     String
-  type        TransactionType
-  amountCents Int
-  description String?
-  createdAt   DateTime        @default(now())
-
-  child Child @relation(fields: [childId], references: [id])
-
-  @@index([childId])
-}
-
-model TokenDeposit {
-  id             String   @id @default(uuid())
-  childId        String
-  volunteerId    String?
-  tokensReturned Int
-  createdAt      DateTime @default(now())
-
-  child     Child @relation(fields: [childId], references: [id])
-  volunteer User? @relation(fields: [volunteerId], references: [id])
-
-  @@index([childId])
-}
-
-model VendorTokenTurnin {
-  id              String   @id @default(uuid())
-  vendorId        String
-  tokensSubmitted Int
-  marketDate      DateTime
-  verifiedBy      String?
-  createdAt       DateTime @default(now())
-
-  vendor         User  @relation("VendorTurnins", fields: [vendorId], references: [id])
-  verifiedByUser User? @relation("VerifiedTurnins", fields: [verifiedBy], references: [id])
-}
-
-model AuditLog {
-  id        String   @id @default(uuid())
-  userId    String?
-  action    String
-  entity    String?
-  entityId  String?
-  details   Json?
-  createdAt DateTime @default(now())
-
-  user User? @relation(fields: [userId], references: [id])
+enum Gender {
+  male
+  female
+  other
 }
