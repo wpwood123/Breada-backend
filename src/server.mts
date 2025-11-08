@@ -323,9 +323,35 @@ app.get(
 //--------------------------------------------------------
 
 //--------------------------------------------------------
-// TODO: GET /api/children-parent
+// TODO: GET /api/parent-children
 // Return the children for a given parent
 //--------------------------------------------------------
+app.get(
+  "/api/my-children",
+  verifyFirebaseToken,
+  requireRole("parent", "volunteer", "admin"),
+  async (req: AuthenticatedRequest, res: Response) => {
+    console.log("api/my-children called")
+    try {
+      const parentUser = await prisma.user.findUnique({
+        where: { firebaseUid: req.user!.uid },
+      });
+
+      if (!parentUser) return res.status(404).json({ error: "Parent not found" });
+
+      const children = await prisma.child.findMany({
+        where: { parentId: parentUser.id },
+        include: { balance: true },
+        orderBy: { name: "asc" },
+      });
+      console.log("Returning:", children)
+      return res.json(children);
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
 
 
 // -------------------------------------------------------
