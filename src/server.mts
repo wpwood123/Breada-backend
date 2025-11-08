@@ -3,12 +3,12 @@
  * Express + Prisma + Firebase Auth backend for Breada
  */
 
-import express from 'express';
-import type { NextFunction, Request, Response} from 'express';
-import { PrismaClient, UserRole, TransactionType } from '@prisma/client';
+import express from "express";
+import type { NextFunction, Request, Response } from "express";
+import { PrismaClient, UserRole, TransactionType } from "@prisma/client";
 import cors from "cors";
 import dotenv from "dotenv";
-import admin from './firebaseAdmin.js';
+import admin from "./firebaseAdmin.js";
 
 dotenv.config();
 
@@ -16,14 +16,15 @@ const prisma = new PrismaClient();
 const app = express();
 
 // ✅ Enable CORS
-app.use(cors({
-  origin: "http://localhost:5173", // your frontend origin
-  methods: ["GET", "POST", "PUT", "DELETE"],
-  credentials: true, // optional if you send cookies
-}));
+app.use(
+  cors({
+    origin: "http://localhost:5173", // your frontend origin
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true, // optional if you send cookies
+  })
+);
 
 app.use(express.json());
-
 
 // -------------------------------------------------------
 // Initialize Firebase Admin
@@ -55,22 +56,24 @@ const verifyFirebaseToken = async (
   next: NextFunction
 ) => {
   const authHeader = req.headers.authorization || req.headers.Authorization;
-  if (!authHeader || !authHeader.toString().startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing or invalid Authorization header' });
+  if (!authHeader || !authHeader.toString().startsWith("Bearer ")) {
+    return res
+      .status(401)
+      .json({ error: "Missing or invalid Authorization header" });
   }
 
-  const idToken = authHeader.toString().split(' ')[1];
+  const idToken = authHeader.toString().split(" ")[1];
   try {
     const decoded = await admin.auth().verifyIdToken(idToken);
     req.user = {
       uid: decoded.uid,
       email: decoded.email,
-      role: (decoded as any).role || 'parent', // default fallback
+      role: (decoded as any).role || "parent", // default fallback
     };
     next();
   } catch (err) {
-    console.error('Token verification error:', err);
-    return res.status(401).json({ error: 'Invalid or expired token' });
+    console.error("Token verification error:", err);
+    return res.status(401).json({ error: "Invalid or expired token" });
   }
 };
 
@@ -81,7 +84,9 @@ const requireRole = (...allowedRoles: string[]) => {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     const role = req.user?.role;
     if (!role || !allowedRoles.includes(role)) {
-      return res.status(403).json({ error: 'Forbidden: insufficient permissions' });
+      return res
+        .status(403)
+        .json({ error: "Forbidden: insufficient permissions" });
     }
     next();
   };
@@ -122,7 +127,7 @@ app.get("/api/protected", async (req, res) => {
 // Creates a new user record in the database
 // -------------------------------------------------------
 app.post(
-  '/api/users-create',
+  "/api/users-create",
   verifyFirebaseToken,
   async (req: AuthenticatedRequest, res: Response) => {
     console.log("POST api/users-create Request: \n", req.body);
@@ -131,7 +136,7 @@ app.post(
         name,
         email,
         phone,
-        role = 'parent',
+        role = "parent",
         street,
         city,
         state,
@@ -139,18 +144,22 @@ app.post(
       } = req.body;
 
       if (!email || !name) {
-        return res.status(400).json({ error: 'Missing required fields: email, name' });
+        return res
+          .status(400)
+          .json({ error: "Missing required fields: email, name" });
       }
 
       // ✅ Only admins can create non-parent roles
-      if (role !== 'parent' && req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Only admins can assign non-parent roles' });
+      if (role !== "parent" && req.user?.role !== "admin") {
+        return res
+          .status(403)
+          .json({ error: "Only admins can assign non-parent roles" });
       }
 
       // ✅ Check if user already exists
       const existing = await prisma.user.findUnique({ where: { email } });
       if (existing) {
-        return res.status(409).json({ error: 'User already exists' });
+        return res.status(409).json({ error: "User already exists" });
       }
 
       // ✅ Create user in Prisma
@@ -169,28 +178,28 @@ app.post(
       });
 
       // Find the current logged-in Prisma user
-const actingUser = await prisma.user.findUnique({
-  where: { firebaseUid: req.user?.uid },
-  select: { id: true },
-});
+      const actingUser = await prisma.user.findUnique({
+        where: { firebaseUid: req.user?.uid },
+        select: { id: true },
+      });
 
-await prisma.auditLog.create({
-  data: {
-    userId: actingUser?.id ?? user.id, // fallback if user just created themselves
-    action: 'create_user',
-    entity: 'user',
-    entityId: user.id,
-    details: { createdRole: role },
-  },
+      await prisma.auditLog.create({
+        data: {
+          userId: actingUser?.id ?? user.id, // fallback if user just created themselves
+          action: "create_user",
+          entity: "user",
+          entityId: user.id,
+          details: { createdRole: role },
+        },
       });
 
       return res.status(201).json({
-        message: 'User created successfully',
+        message: "User created successfully",
         user,
       });
     } catch (err) {
-      console.error('Error creating user:', err);
-      return res.status(500).json({ error: 'Internal server error' });
+      console.error("Error creating user:", err);
+      return res.status(500).json({ error: "Internal server error" });
     }
   }
 );
@@ -201,9 +210,9 @@ await prisma.auditLog.create({
 // Only accessible by Admins
 // -------------------------------------------------------
 app.get(
-  '/api/users',
+  "/api/users",
   verifyFirebaseToken,
-  requireRole('admin'),
+  requireRole("admin"),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       // Optional pagination params (future expansion)
@@ -217,7 +226,7 @@ app.get(
             include: { balance: true },
           },
         },
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       });
 
       return res.json({
@@ -225,16 +234,83 @@ app.get(
         users,
       });
     } catch (err) {
-      console.error('Error fetching users:', err);
-      return res.status(500).json({ error: 'Internal server error' });
+      console.error("Error fetching users:", err);
+      return res.status(500).json({ error: "Internal server error" });
     }
   }
 );
 
-//--------------------------------------------------------
-// TODO: GET /api/user-get-qr-code
-// Returns a parent user and all children by a Child's QR code
-//--------------------------------------------------------
+// -------------------------------------------------------
+// GET /api/child/:childId
+// Look up a child by their ID (decoded from QR code)
+// -------------------------------------------------------
+app.get(
+  "/api/child/:childId",
+  verifyFirebaseToken,
+  requireRole("parent", "volunteer", "admin"),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { childId } = req.params;
+
+      if (!childId) {
+        return res.status(400).json({ error: "childId parameter is required" });
+      }
+
+      // Get child + parent + balance
+      const child = await prisma.child.findUnique({
+        where: { id: childId },
+        include: {
+          parent: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+              street: true,
+              city: true,
+              state: true,
+              zipCode: true,
+            },
+          },
+          balance: true,
+        },
+      });
+
+      if (!child) {
+        return res.status(404).json({ error: "Child not found" });
+      }
+
+      // If requester is a parent, ensure they can only view *their own* children
+      if (req.user?.role === "parent") {
+        const parentRecord = await prisma.user.findUnique({
+          where: { firebaseUid: req.user.uid },
+        });
+
+        if (!parentRecord || parentRecord.id !== child.parentId) {
+          return res.status(403).json({ error: "You are not allowed to access this child" });
+        }
+      }
+
+      // Get siblings
+      const siblings = await prisma.child.findMany({
+        where: {
+          parentId: child.parentId,
+          id: { not: child.id },
+        },
+        select: { id: true, name: true },
+      });
+
+      return res.json({
+        child,
+        siblings,
+      });
+    } catch (err) {
+      console.error("Child lookup error:", err);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
 
 //--------------------------------------------------------
 // TODO: GET /api/user-get-search
@@ -245,6 +321,12 @@ app.get(
 // TODO: GET /api/user-get-self
 // Return the logged in user's information
 //--------------------------------------------------------
+
+//--------------------------------------------------------
+// TODO: GET /api/children-parent
+// Return the children for a given parent
+//--------------------------------------------------------
+
 
 // -------------------------------------------------------
 // TODO: POST /api/users-update
@@ -259,79 +341,93 @@ app.get(
 // -------------------------------------------------------
 
 // -------------------------------------------------------
-// TODO: POST /api/create-child
-// Creates a new child record in the database
+// POST /api/child-create
+// Creates a new child and initializes their balance
 // -------------------------------------------------------
 app.post(
-  '/api/users-create',
+  "/api/child-create",
   verifyFirebaseToken,
+  requireRole("parent", "volunteer", "admin"),
   async (req: AuthenticatedRequest, res: Response) => {
-    console.log("POST api/users-create Request: \n", req.body);
     try {
       const {
         name,
-        email,
-        phone,
-        role = 'parent',
-        street,
-        city,
-        state,
-        zipCode,
+        gender,
+        dateOfBirth,
+        parentId: bodyParentId,
       } = req.body;
 
-      if (!email || !name) {
-        return res.status(400).json({ error: 'Missing required fields: email, name' });
+      if (!name || !gender ) {
+        return res.status(400).json({
+          error: "name and gender are required",
+        });
       }
 
-      // ✅ Only admins can create non-parent roles
-      if (role !== 'parent' && req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Only admins can assign non-parent roles' });
-      }
-
-      // ✅ Check if user already exists
-      const existing = await prisma.user.findUnique({ where: { email } });
-      if (existing) {
-        return res.status(409).json({ error: 'User already exists' });
-      }
-
-      // ✅ Create user in Prisma
-      const user = await prisma.user.create({
-        data: {
-          firebaseUid: req.user!.uid,
-          name,
-          email,
-          phone,
-          role,
-          street,
-          city,
-          state,
-          zipCode,
-        },
+      // 1️⃣ Look up requesting user in DB (by firebase UID)
+      const requestingUser = await prisma.user.findUnique({
+        where: { firebaseUid: req.user!.uid },
       });
 
-      // Find the current logged-in Prisma user
-const actingUser = await prisma.user.findUnique({
-  where: { firebaseUid: req.user?.uid },
-  select: { id: true },
-});
+      if (!requestingUser) {
+        return res
+          .status(404)
+          .json({ error: "Requesting user not found in database" });
+      }
 
-await prisma.auditLog.create({
-  data: {
-    userId: actingUser?.id ?? user.id, // fallback if user just created themselves
-    action: 'create_user',
-    entity: 'user',
-    entityId: user.id,
-    details: { createdRole: role },
-  },
+      let parentIdToUse: string;
+
+      // 2️⃣ Determine allowed behavior based on role
+      if (requestingUser.role === "parent") {
+        // Parents can only create children for themselves
+        parentIdToUse = requestingUser.id;
+      } else if (
+        requestingUser.role === "volunteer" ||
+        requestingUser.role === "admin"
+      ) {
+        // Admin/Volunteer must specify which parent the child belongs to
+        if (!bodyParentId) {
+          return res.status(400).json({
+            error:
+              "parentId is required when creating a child as volunteer/admin",
+          });
+        }
+        parentIdToUse = bodyParentId;
+      } else {
+        return res.status(403).json({ error: "Invalid role for this action" });
+      }
+
+      const dob = dateOfBirth ? new Date(dateOfBirth) : null;
+
+      // 5️⃣ Create Child + Balance atomically
+      const result = await prisma.$transaction(async (tx) => {
+        const child = await tx.child.create({
+          data: {
+            parentId: parentIdToUse,
+            name,
+            gender,
+            dateOfBirth: dob,
+          },
+        });
+
+        const balance = await tx.balance.create({
+          data: {
+            childId: child.id,
+            amountCents: 0,
+            lastCheckin: null,
+          },
+        });
+
+        return { child, balance };
       });
 
       return res.status(201).json({
-        message: 'User created successfully',
-        user,
+        message: "Child created successfully",
+        child: result.child,
+        balance: result.balance,
       });
     } catch (err) {
-      console.error('Error creating user:', err);
-      return res.status(500).json({ error: 'Internal server error' });
+      console.error("Child creation error:", err);
+      return res.status(500).json({ error: "Internal server error" });
     }
   }
 );
@@ -346,29 +442,34 @@ await prisma.auditLog.create({
 // POST /api/checkin-qr-code
 // -------------------------------------------------------
 app.post(
-  '/api/checkin-qr-code',
+  "/api/checkin-qr-code",
   verifyFirebaseToken,
-  requireRole('volunteer', 'admin'),
+  requireRole("volunteer", "admin"),
   async (req: AuthenticatedRequest, res: Response) => {
-    const { qrCode } = req.body;
-    if (!qrCode) return res.status(400).json({ error: 'qrCode is required' });
+    const { childId } = req.params;
+    if (!childId) return res.status(400).json({ error: "child ID is required" });
 
     try {
       const child = await prisma.child.findUnique({
-        where: { qrCode },
+        where: { id: childId },
         include: { parent: true },
       });
 
-      if (!child) return res.status(404).json({ error: 'Child not found' });
+      if (!child) return res.status(404).json({ error: "Child not found" });
 
       const siblings = await prisma.child.findMany({
         where: { parentId: child.parentId, id: { not: child.id } },
-        select: { id: true, name: true, qrCode: true, dateOfBirth: true, timesCheckedIn: true },
+        select: {
+          id: true,
+          name: true,
+          dateOfBirth: true,
+          timesCheckedIn: true,
+        },
       });
 
       const lastCheckin = await prisma.checkin.findFirst({
         where: { childId: child.id },
-        orderBy: { checkinTime: 'desc' },
+        orderBy: { checkinTime: "desc" },
       });
 
       const now = new Date();
@@ -387,7 +488,9 @@ app.post(
       const creditAmount = 200; // $2.00 in cents
 
       const result = await prisma.$transaction(async (tx) => {
-        let balance = await tx.balance.findUnique({ where: { childId: child.id } });
+        let balance = await tx.balance.findUnique({
+          where: { childId: child.id },
+        });
         if (!balance) {
           balance = await tx.balance.create({
             data: { childId: child.id, amountCents: 0 },
@@ -422,15 +525,15 @@ app.post(
             childId: child.id,
             type: TransactionType.credit,
             amountCents: creditAmount,
-            description: 'Daily check-in credit',
+            description: "Daily check-in credit",
           },
         });
 
         await tx.auditLog.create({
           data: {
             userId: req.user?.uid,
-            action: 'checkin',
-            entity: 'child',
+            action: "checkin",
+            entity: "child",
             entityId: child.id,
             details: { creditedAmount: creditAmount },
           },
@@ -440,14 +543,14 @@ app.post(
       });
 
       return res.json({
-        message: 'Check-in successful',
+        message: "Check-in successful",
         child,
         siblings,
         balance: result,
       });
     } catch (err) {
-      console.error('Checkin error:', err);
-      return res.status(500).json({ error: 'Internal server error' });
+      console.error("Checkin error:", err);
+      return res.status(500).json({ error: "Internal server error" });
     }
   }
 );
@@ -461,20 +564,22 @@ app.post(
 // Situation 2: Withdraw Funds
 // -------------------------------------------------------
 app.post(
-  '/api/withdraw',
+  "/api/withdraw",
   verifyFirebaseToken,
-  requireRole('volunteer', 'admin'),
+  requireRole("volunteer", "admin"),
   async (req: AuthenticatedRequest, res: Response) => {
     const { childId, amountCents } = req.body;
-    if (!childId || typeof amountCents !== 'number' || amountCents <= 0)
-      return res.status(400).json({ error: 'childId and a positive amountCents are required' });
+    if (!childId || typeof amountCents !== "number" || amountCents <= 0)
+      return res
+        .status(400)
+        .json({ error: "childId and a positive amountCents are required" });
 
     try {
       const result = await prisma.$transaction(async (tx) => {
         const balance = await tx.balance.findUnique({ where: { childId } });
-        if (!balance) throw new Error('Balance not found');
+        if (!balance) throw new Error("Balance not found");
         if (balance.amountCents < amountCents)
-          throw new Error('Insufficient balance');
+          throw new Error("Insufficient balance");
 
         const updatedBalance = await tx.balance.update({
           where: { childId },
@@ -496,8 +601,8 @@ app.post(
         await tx.auditLog.create({
           data: {
             userId: req.user?.uid,
-            action: 'withdraw',
-            entity: 'child',
+            action: "withdraw",
+            entity: "child",
             entityId: childId,
             details: { amountCents, transactionId: transaction.id },
           },
@@ -507,13 +612,15 @@ app.post(
       });
 
       return res.json({
-        message: 'Withdraw successful',
+        message: "Withdraw successful",
         balance: result.updatedBalance,
         transaction: result.transaction,
       });
     } catch (err: any) {
-      console.error('Withdraw error:', err);
-      return res.status(400).json({ error: err.message || 'Internal server error' });
+      console.error("Withdraw error:", err);
+      return res
+        .status(400)
+        .json({ error: err.message || "Internal server error" });
     }
   }
 );
@@ -523,19 +630,23 @@ app.post(
 // Situation 3: Deposit Funds
 // -------------------------------------------------------
 app.post(
-  '/api/deposit',
+  "/api/deposit",
   verifyFirebaseToken,
-  requireRole('volunteer', 'admin'),
+  requireRole("volunteer", "admin"),
   async (req: AuthenticatedRequest, res: Response) => {
     const { childId, amountCents } = req.body;
-    if (!childId || typeof amountCents !== 'number' || amountCents <= 0)
-      return res.status(400).json({ error: 'childId and a positive amountCents are required' });
+    if (!childId || typeof amountCents !== "number" || amountCents <= 0)
+      return res
+        .status(400)
+        .json({ error: "childId and a positive amountCents are required" });
 
     try {
       const result = await prisma.$transaction(async (tx) => {
         let balance = await tx.balance.findUnique({ where: { childId } });
         if (!balance) {
-          balance = await tx.balance.create({ data: { childId, amountCents: 0 } });
+          balance = await tx.balance.create({
+            data: { childId, amountCents: 0 },
+          });
         }
 
         const updatedBalance = await tx.balance.update({
@@ -558,8 +669,8 @@ app.post(
         await tx.auditLog.create({
           data: {
             userId: req.user?.uid,
-            action: 'deposit',
-            entity: 'child',
+            action: "deposit",
+            entity: "child",
             entityId: childId,
             details: { amountCents, transactionId: transaction.id },
           },
@@ -569,13 +680,13 @@ app.post(
       });
 
       return res.json({
-        message: 'Deposit successful',
+        message: "Deposit successful",
         balance: result.updatedBalance,
         transaction: result.transaction,
       });
     } catch (err) {
-      console.error('Deposit error:', err);
-      return res.status(500).json({ error: 'Internal server error' });
+      console.error("Deposit error:", err);
+      return res.status(500).json({ error: "Internal server error" });
     }
   }
 );
@@ -590,13 +701,15 @@ app.post(
 // Situation 4: Vendor Returns
 // -------------------------------------------------------
 app.post(
-  '/api/vendor-return',
+  "/api/vendor-return",
   verifyFirebaseToken,
-  requireRole('volunteer', 'admin'),
+  requireRole("volunteer", "admin"),
   async (req: AuthenticatedRequest, res: Response) => {
     const { vendorId, tokensSubmitted, marketDate } = req.body;
-    if (!vendorId || typeof tokensSubmitted !== 'number' || tokensSubmitted < 0)
-      return res.status(400).json({ error: 'vendorId and non-negative tokensSubmitted are required' });
+    if (!vendorId || typeof tokensSubmitted !== "number" || tokensSubmitted < 0)
+      return res.status(400).json({
+        error: "vendorId and non-negative tokensSubmitted are required",
+      });
 
     try {
       const date = marketDate ? new Date(marketDate) : new Date();
@@ -613,17 +726,17 @@ app.post(
       await prisma.auditLog.create({
         data: {
           userId: req.user?.uid,
-          action: 'vendor_return',
-          entity: 'vendor_token_turnin',
+          action: "vendor_return",
+          entity: "vendor_token_turnin",
           entityId: record.id,
           details: { vendorId, tokensSubmitted, marketDate: date },
         },
       });
 
-      return res.json({ message: 'Vendor tokens recorded', record });
+      return res.json({ message: "Vendor tokens recorded", record });
     } catch (err) {
-      console.error('Vendor return error:', err);
-      return res.status(500).json({ error: 'Internal server error' });
+      console.error("Vendor return error:", err);
+      return res.status(500).json({ error: "Internal server error" });
     }
   }
 );
@@ -640,7 +753,7 @@ app.post(
 // TODO: GET /api/vendor-search
 // -------------------------------------------------------
 
-app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

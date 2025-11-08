@@ -33,11 +33,9 @@ model Child {
   id             String         @id @default(uuid())
   parentId       String
   name           String
-  qrCode         String         @unique
   createdAt      DateTime       @default(now())
   dateOfBirth    DateTime?
   timesCheckedIn Int            @default(0)
-  parentName     String?
   gender         Gender
   balance        Balance?
   checkins       Checkin[]
@@ -130,7 +128,7 @@ enum TransactionType {
 }
 
 enum Gender {
-  male
-  female
-  other
+  MALE
+  FEMALE
+  OTHER
 }
