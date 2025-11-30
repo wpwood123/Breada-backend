@@ -6,19 +6,27 @@
 import express from "express";
 import type { NextFunction, Request, Response } from "express";
 import { PrismaClient, UserRole, TransactionType } from "@prisma/client";
+import { Prisma } from "@prisma/client";
+import { format } from "date-fns"; // optional for CSV date formatting
+import { differenceInYears } from "date-fns";
 import cors from "cors";
 import dotenv from "dotenv";
 import admin from "./firebaseAdmin.js";
 
+// await admin.auth().setCustomUserClaims("5wSNrPgwD8QRRF7H9AsNCSvnoFy1", {
+//   role: "admin",
+// });
+
 dotenv.config();
 
+const firebaseAdminAuth = admin.auth();
 const prisma = new PrismaClient();
 const app = express();
 
 // ✅ Enable CORS
 app.use(
   cors({
-    origin: "http://localhost:5173", // your frontend origin
+    origin: "https://localhost:5173", // your frontend origin
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true, // optional if you send cookies
   })
@@ -82,6 +90,7 @@ const verifyFirebaseToken = async (
 // -------------------------------------------------------
 const requireRole = (...allowedRoles: string[]) => {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    console.log("Calling requireRole with: ", req.user);
     const role = req.user?.role;
     if (!role || !allowedRoles.includes(role)) {
       return res
@@ -99,6 +108,60 @@ function hoursBetween(dateA: Date, dateB: Date): number {
   const ms = Math.abs(dateA.getTime() - dateB.getTime());
   return ms / (1000 * 60 * 60);
 }
+
+// -------------------------------------------------------
+// GET /api/set-role
+// Set the user's firebase claim role
+// -------------------------------------------------------
+app.post("/api/set-role", async (req, res) => {
+  const { firebaseUid, role } = req.body;
+
+  if (!firebaseUid || !role) {
+    return res.status(400).json({ error: "firebaseUid and role are required" });
+  }
+
+  try {
+    await admin.auth().setCustomUserClaims(firebaseUid, { role });
+    return res.json({ message: "Role claim updated. User must re-login." });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Failed to set role claim" });
+  }
+});
+
+
+// -------------------------------------------------------
+// GET /api/admin/set-role
+// -------------------------------------------------------
+app.post(
+  "/api/admin/set-role",
+  verifyFirebaseToken,
+  requireRole("admin"),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { userId, role } = req.body;
+
+      if (!["parent", "volunteer", "admin"].includes(role)) {
+        return res.status(400).json({ error: "Invalid role" });
+      }
+
+      // 1. Update Prisma role
+      await prisma.user.update({
+        where: { id: userId },
+        data: { role },
+      });
+
+      // 2. Update Firebase Custom Claim
+      await firebaseAdminAuth.setCustomUserClaims(userId, { role });
+
+      return res.json({ message: "Role updated successfully" });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: "Failed to update role" });
+    }
+  }
+);
+
 
 // -------------------------------------------------------
 // GET /api/protected
@@ -205,6 +268,71 @@ app.post(
 );
 
 // -------------------------------------------------------
+// POST /api/admin-create
+// Creates a new admin
+// -------------------------------------------------------
+app.post(
+  "/api/admin-create",
+  verifyFirebaseToken,
+  requireRole("admin"),
+  async (req, res) => {
+    try {
+      const { firebaseUid, email, name, phone } = req.body;
+
+      if (!firebaseUid) {
+        return res
+          .status(400)
+          .json({ error: "firebaseUid is required to create a user" });
+      }
+
+      const user = await prisma.user.create({
+        data: {
+          firebaseUid,
+          email,
+          name,
+          phone,
+          role: "admin",
+        },
+      });
+
+      res.json({ message: "Admin created", user });
+    } catch (err) {
+      console.error("Admin creation error:", err);
+      res.status(500).json({ error: "Internal Server Error" });
+    }
+  }
+);
+
+app.get(
+  "/api/me",
+  verifyFirebaseToken,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      if (!req.user?.uid) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const dbUser = await prisma.user.findUnique({
+        where: { firebaseUid: req.user.uid },
+        include: {
+          children: true, // optional
+        },
+      });
+
+      if (!dbUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      return res.json(dbUser);
+    } catch (err) {
+      console.error("Error in /api/me:", err);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
+
+// -------------------------------------------------------
 // GET /api/users-get-all
 // Returns all users in the system
 // Only accessible by Admins
@@ -214,6 +342,7 @@ app.get(
   verifyFirebaseToken,
   requireRole("admin"),
   async (req: AuthenticatedRequest, res: Response) => {
+    console.log("calling api/users")
     try {
       // Optional pagination params (future expansion)
       const { limit = 100, offset = 0 } = req.query;
@@ -287,7 +416,9 @@ app.get(
         });
 
         if (!parentRecord || parentRecord.id !== child.parentId) {
-          return res.status(403).json({ error: "You are not allowed to access this child" });
+          return res
+            .status(403)
+            .json({ error: "You are not allowed to access this child" });
         }
       }
 
@@ -311,7 +442,6 @@ app.get(
   }
 );
 
-
 //--------------------------------------------------------
 // TODO: GET /api/user-get-search
 // Maybe not needed. Might be easier for the frontend to search and filter
@@ -331,20 +461,21 @@ app.get(
   verifyFirebaseToken,
   requireRole("parent", "volunteer", "admin"),
   async (req: AuthenticatedRequest, res: Response) => {
-    console.log("api/my-children called")
+    console.log("api/my-children called");
     try {
       const parentUser = await prisma.user.findUnique({
         where: { firebaseUid: req.user!.uid },
       });
 
-      if (!parentUser) return res.status(404).json({ error: "Parent not found" });
+      if (!parentUser)
+        return res.status(404).json({ error: "Parent not found" });
 
       const children = await prisma.child.findMany({
         where: { parentId: parentUser.id },
         include: { balance: true },
         orderBy: { name: "asc" },
       });
-      console.log("Returning:", children)
+      //console.log("Returning:", children)
       return res.json(children);
     } catch (err) {
       console.error(err);
@@ -352,7 +483,6 @@ app.get(
     }
   }
 );
-
 
 // -------------------------------------------------------
 // TODO: POST /api/users-update
@@ -376,14 +506,9 @@ app.post(
   requireRole("parent", "volunteer", "admin"),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const {
-        name,
-        gender,
-        dateOfBirth,
-        parentId: bodyParentId,
-      } = req.body;
+      const { name, gender, dateOfBirth, parentId: bodyParentId } = req.body;
 
-      if (!name || !gender ) {
+      if (!name || !gender) {
         return res.status(400).json({
           error: "name and gender are required",
         });
@@ -473,7 +598,8 @@ app.post(
   requireRole("volunteer", "admin"),
   async (req: AuthenticatedRequest, res: Response) => {
     const { childId } = req.params;
-    if (!childId) return res.status(400).json({ error: "child ID is required" });
+    if (!childId)
+      return res.status(400).json({ error: "child ID is required" });
 
     try {
       const child = await prisma.child.findUnique({
@@ -778,6 +904,265 @@ app.post(
 // -------------------------------------------------------
 // TODO: GET /api/vendor-search
 // -------------------------------------------------------
+
+// server.ts (or api/admin.ts router)
+// Assumes: express app, prisma, verifyFirebaseToken, requireRole are already imported/initialized
+
+// Helper to compute age
+function computeAge(dob?: Date | null) {
+  if (!dob) return null;
+  const diff = Date.now() - dob.getTime();
+  return Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25));
+}
+
+// GET /api/admin/children
+// Query params:
+//   limit (default 100), offset (default 0)
+//   sortBy (name | age | address | balance | parentName | timesCheckedIn | lastCheckin) (default: parentName)
+//   order (asc | desc) (default asc)
+//   search (exact match across string columns)
+app.get(
+  "/api/admin/children",
+
+  verifyFirebaseToken,
+  requireRole("admin"),
+  async (req: Request, res: Response) => {
+    console.log("Calling GET API: api/admin/children");
+    try {
+      const limit = Math.min(Number(req.query.limit ?? 100), 1000); // protect resources
+      const offset = Number(req.query.offset ?? 0);
+      const sortBy = String(req.query.sortBy ?? "parentName");
+      const order =
+        String(req.query.order ?? "asc") === "desc" ? "desc" : "asc";
+      const search = req.query.search ? String(req.query.search) : null;
+
+      // Map UI sort key to Prisma orderBy
+      // fallback default ordering: parent.name asc, child.name asc
+      const orderBy: Prisma.ChildOrderByWithRelationInput[] = [];
+      if (sortBy === "parentName") {
+        orderBy.push({ parent: { name: order } });
+        orderBy.push({ name: "asc" });
+      } else if (sortBy === "name") {
+        orderBy.push({ name: order });
+      } else if (sortBy === "balance") {
+        // balance is relation — order on balance.amountCents
+        orderBy.push({ balance: { amountCents: order } });
+      } else if (sortBy === "timesCheckedIn") {
+        orderBy.push({ timesCheckedIn: order });
+      } else if (sortBy === "lastCheckin") {
+        orderBy.push({ balance: { lastCheckin: order } });
+      } else {
+        // default fallback
+        orderBy.push({ parent: { name: "asc" } });
+        orderBy.push({ name: "asc" });
+      }
+
+      // Build where clause for exact-match search
+      let where: Prisma.ChildWhereInput | undefined = undefined;
+      if (search) {
+        const s = search.trim();
+        const isNumeric = !isNaN(Number(s));
+        where = {
+          OR: [
+            { name: { contains: s, mode: "insensitive" } },
+            { parent: { name: { contains: s, mode: "insensitive" } } },
+            { parent: { street: { contains: s, mode: "insensitive" } } },
+            { parent: { city: { contains: s, mode: "insensitive" } } },
+            { parent: { state: { contains: s, mode: "insensitive" } } },
+            { parent: { zipCode: { contains: s, mode: "insensitive" } } },
+
+            ...(isNumeric ? [{ balance: { amountCents: Number(s) } }] : []),
+          ],
+        };
+      }
+
+      const [total, children] = await Promise.all([
+        prisma.child.count({ where }),
+        prisma.child.findMany({
+          where,
+          skip: offset,
+          take: limit,
+          orderBy,
+          include: {
+            parent: {
+              select: {
+                id: true,
+                name: true,
+                street: true,
+                city: true,
+                state: true,
+                zipCode: true,
+              },
+            },
+            balance: true,
+          },
+        }),
+      ]);
+
+      // map results to fields expected by frontend
+      const mapped = children.map((c) => {
+        const age = c.dateOfBirth ? computeAge(c.dateOfBirth) : null;
+        const address = c.parent
+          ? `${c.parent.street ?? ""} ${c.parent.city ?? ""} ${
+              c.parent.state ?? ""
+            } ${c.parent.zipCode ?? ""}`.trim()
+          : "";
+        return {
+          id: c.id,
+          name: c.name,
+          gender: c.gender,
+          age,
+          address,
+          balanceCents: c.balance?.amountCents ?? 0,
+          parentName: c.parent?.name ?? "",
+          parentId: c.parentId,
+          timesCheckedIn: c.timesCheckedIn,
+          lastCheckin: c.balance?.lastCheckin ?? null,
+        };
+      });
+
+      return res.json({ total, data: mapped });
+    } catch (err) {
+      console.error("GET /api/admin/children error", err);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
+// GET /api/admin/children/export?search=...&sortBy=...&order=...
+// returns CSV file
+app.get(
+  "/api/admin/children/export",
+  verifyFirebaseToken,
+  requireRole("admin"),
+  async (req: Request, res: Response) => {
+    console.log("Calling GET API: api/admin/children/export");
+    try {
+      const sortBy = String(req.query.sortBy ?? "parentName");
+      const order =
+        String(req.query.order ?? "asc") === "desc" ? "desc" : "asc";
+      const search = req.query.search ? String(req.query.search) : null;
+
+      // For export, we fetch all rows matching search
+      // Reuse same where & orderBy logic (copied / refactor as needed)
+      let where: Prisma.ChildWhereInput | undefined = undefined;
+      if (search) {
+        const s = search.trim();
+        const isNumeric = !isNaN(Number(s));
+        where = {
+          OR: [
+            { name: { contains: s, mode: "insensitive" } },
+            { parent: { name: { contains: s, mode: "insensitive" } } },
+            { parent: { street: { contains: s, mode: "insensitive" } } },
+            { parent: { city: { contains: s, mode: "insensitive" } } },
+            { parent: { state: { contains: s, mode: "insensitive" } } },
+            { parent: { zipCode: { contains: s, mode: "insensitive" } } },
+
+            ...(isNumeric ? [{ balance: { amountCents: Number(s) } }] : []),
+          ],
+        };
+      }
+
+      // orderBy same as above (simple default)
+      const orderBy: Prisma.ChildOrderByWithRelationInput[] =
+        sortBy === "parentName"
+          ? [{ parent: { name: order } }, { name: "asc" }]
+          : [{ name: order }];
+
+      const children = await prisma.child.findMany({
+        where,
+        orderBy,
+        include: { parent: true, balance: true },
+      });
+
+      // Build CSV header and rows (simple escaping)
+      const header = [
+        "Name",
+        "Age",
+        "Address",
+        "Balance",
+        "Parent Name",
+        "Times Checked In",
+        "Last Checked In",
+      ];
+      const rows = children.map((c) => {
+        const age = c.dateOfBirth ? computeAge(c.dateOfBirth) : "";
+        const address = c.parent
+          ? `${c.parent.street ?? ""} ${c.parent.city ?? ""} ${
+              c.parent.state ?? ""
+            } ${c.parent.zipCode ?? ""}`.trim()
+          : "";
+        const balance = (c.balance?.amountCents ?? 0) / 100;
+        const last = c.balance?.lastCheckin
+          ? format(new Date(c.balance.lastCheckin), "yyyy-MM-dd HH:mm:ss")
+          : "";
+        return [
+          c.name,
+          String(age),
+          address,
+          String(balance),
+          c.parent?.name ?? "",
+          String(c.timesCheckedIn ?? 0),
+          last,
+        ];
+      });
+
+      // Build CSV string
+      function escapeCell(cell: string) {
+        if (cell == null) return "";
+        if (cell.includes('"') || cell.includes(",") || cell.includes("\n")) {
+          return `"${cell.replace(/"/g, '""')}"`;
+        }
+        return cell;
+      }
+      const csvLines = [header.map(escapeCell).join(",")].concat(
+        rows.map((r) => r.map((c) => escapeCell(String(c))).join(","))
+      );
+      const csv = csvLines.join("\n");
+
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="breada_children_${Date.now()}.csv"`
+      );
+      return res.send(csv);
+    } catch (err) {
+      console.error("GET /api/admin/children/export error", err);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
+// GET /api/admin/parent/:parentId  -> returns parent + children
+app.get(
+  "/api/admin/parent/:parentId",
+  verifyFirebaseToken,
+  requireRole("admin"),
+  async (req: Request, res: Response) => {
+    const parentId = req.params.parentId;
+    if (!parentId)
+      return res.status(400).json({ error: "parentId is required" });
+
+    try {
+      const parent = await prisma.user.findUnique({
+        where: { id: parentId },
+        include: {
+          children: {
+            include: { balance: true },
+            orderBy: { name: "asc" },
+          },
+        },
+      });
+
+      if (!parent) return res.status(404).json({ error: "Parent not found" });
+
+      return res.json({ parent });
+    } catch (err) {
+      console.error("GET /api/admin/parent/:id error", err);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
 
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
