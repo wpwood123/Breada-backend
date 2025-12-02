@@ -170,7 +170,7 @@ app.post(
 app.get("/api/protected", async (req, res) => {
   const authHeader = req.headers.authorization || "";
   const token = authHeader.split(" ")[1];
-
+  console.log("Calling /api/protected: ", req);
   try {
     const decodedToken = await admin.auth().verifyIdToken(token);
     console.log("Authenticated user:", decodedToken.uid);
@@ -303,6 +303,59 @@ app.post(
   }
 );
 
+// -------------------------------------------------------
+// POST /api/admin/create-user
+// Allows admins to create new users and set their role
+// -------------------------------------------------------
+app.post(
+  "/api/admin/create-user",
+  verifyFirebaseToken,
+  requireRole("admin"),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { name, email, phone, role, street, city, state, zipCode } = req.body;
+      console.log("Calling api/admin/create-user/ with \n", req.body);
+      if (!name || !email || !role) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+
+      // Create Firebase user
+      const firebaseUser = await admin.auth().createUser({
+        email,
+        displayName: name,
+      });
+
+      // Set Firebase custom claims
+      await admin.auth().setCustomUserClaims(firebaseUser.uid, { role });
+
+      // Create DB user
+      const user = await prisma.user.create({
+        data: {
+          firebaseUid: firebaseUser.uid,
+          email,
+          name,
+          phone,
+          role,
+          street: street ?? null,
+          city: city ?? null,
+          state: state ?? null,
+          zipCode: zipCode ?? null,
+        },
+      });
+
+      return res.json({ message: "User created", user });
+    } catch (err) {
+      console.error("Error creating user:", err);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
+
+// -------------------------------------------------------
+// POST /api/me
+// Returns current user
+// -------------------------------------------------------
 app.get(
   "/api/me",
   verifyFirebaseToken,
@@ -448,12 +501,7 @@ app.get(
 //--------------------------------------------------------
 
 //--------------------------------------------------------
-// TODO: GET /api/user-get-self
-// Return the logged in user's information
-//--------------------------------------------------------
-
-//--------------------------------------------------------
-// TODO: GET /api/parent-children
+// TODO: GET /api/my-children
 // Return the children for a given parent
 //--------------------------------------------------------
 app.get(
