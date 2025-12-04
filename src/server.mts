@@ -113,21 +113,21 @@ function hoursBetween(dateA: Date, dateB: Date): number {
 // GET /api/set-role
 // Set the user's firebase claim role
 // -------------------------------------------------------
-app.post("/api/set-role", async (req, res) => {
-  const { firebaseUid, role } = req.body;
+// app.post("/api/set-role", async (req, res) => {
+//   const { firebaseUid, role } = req.body;
 
-  if (!firebaseUid || !role) {
-    return res.status(400).json({ error: "firebaseUid and role are required" });
-  }
+//   if (!firebaseUid || !role) {
+//     return res.status(400).json({ error: "firebaseUid and role are required" });
+//   }
 
-  try {
-    await admin.auth().setCustomUserClaims(firebaseUid, { role });
-    return res.json({ message: "Role claim updated. User must re-login." });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: "Failed to set role claim" });
-  }
-});
+//   try {
+//     await admin.auth().setCustomUserClaims(firebaseUid, { role });
+//     return res.json({ message: "Role claim updated. User must re-login." });
+//   } catch (err) {
+//     console.error(err);
+//     return res.status(500).json({ error: "Failed to set role claim" });
+//   }
+// });
 
 
 // -------------------------------------------------------
@@ -641,7 +641,7 @@ app.post(
 // POST /api/checkin-qr-code
 // -------------------------------------------------------
 app.post(
-  "/api/checkin-qr-code",
+  "/api/checkin",
   verifyFirebaseToken,
   requireRole("volunteer", "admin"),
   async (req: AuthenticatedRequest, res: Response) => {
@@ -1211,6 +1211,35 @@ app.get(
     }
   }
 );
+
+// -------------------------------------------------------
+// POST /api/parents
+// Returns all parents
+// -------------------------------------------------------
+app.get(
+  "/api/parents",
+  verifyFirebaseToken,
+  requireRole("volunteer", "admin"),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const parents = await prisma.user.findMany({
+        where: { role: "parent" },
+        include: {
+          children: {
+            include: { balance: true },
+          },
+        },
+        orderBy: { name: "asc" }, // default sort
+      });
+
+      return res.json(parents);
+    } catch (err) {
+      console.error("Error fetching parents:", err);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
 
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
