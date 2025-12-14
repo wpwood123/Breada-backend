@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "node src/server.mts"
+    "dev": "node src/server.mts",
+    "dev:server": "tsx src/server.mts"
   },
   "keywords": [],
   "author": "",
@@ -16,13 +17,17 @@
     "cors": "^2.8.5",
     "date-fns": "^4.1.0",
     "dotenv": "^17.2.3",
-    "express": "^5.1.0",
+    "express": "^5.2.1",
     "firebase-admin": "^13.6.0",
-    "prisma": "^6.18.0"
+    "nanoid": "^5.1.6",
+    "pdfkit": "^0.17.2",
+    "prisma": "^6.18.0",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/date-fns": "^2.5.3",
-    "@types/express": "^5.0.4"
+    "@types/express": "^5.0.4",
+    "tsx": "^4.21.0"
   }
 }

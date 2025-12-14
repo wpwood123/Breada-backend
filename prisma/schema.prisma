@@ -37,6 +37,8 @@ model Child {
   dateOfBirth    DateTime?
   timesCheckedIn Int            @default(0)
   gender         Gender
+  qrCodeId       String?        @unique
+  qrCode         QrCode?        
   balance        Balance?
   checkins       Checkin[]
   parent         User           @relation("ParentChildren", fields: [parentId], references: [id])
@@ -45,6 +47,17 @@ model Child {
 
   @@index([parentId])
 }
+
+model QrCode {
+  id            String   @id @default(uuid())          
+  code          String   @unique                 // This is the actual QR value
+  printed       Boolean  @default(false)
+  childId       String?  @unique
+  createdAt     DateTime @default(now())
+
+  child         Child?   @relation(fields: [childId], references: [id])
+}
+
 
 model Balance {
   id          String    @id @default(uuid())

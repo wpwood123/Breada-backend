@@ -1,8 +1,3 @@
-/**
- * server.ts
- * Express + Prisma + Firebase Auth backend for Breada
- */
-
 import express from "express";
 import type { NextFunction, Request, Response } from "express";
 import { PrismaClient, UserRole, TransactionType } from "@prisma/client";
@@ -12,6 +7,10 @@ import { differenceInYears } from "date-fns";
 import cors from "cors";
 import dotenv from "dotenv";
 import admin from "./firebaseAdmin.js";
+import { customAlphabet } from "nanoid";
+import printQrCodesRoute from "./routes/print-qr-codes.mts";
+import PDFDocument from "pdfkit";
+import QRCode from "qrcode";
 
 // await admin.auth().setCustomUserClaims("5wSNrPgwD8QRRF7H9AsNCSvnoFy1", {
 //   role: "admin",
@@ -22,6 +21,7 @@ dotenv.config();
 const firebaseAdminAuth = admin.auth();
 const prisma = new PrismaClient();
 const app = express();
+const nanoid = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 8);
 
 // ✅ Enable CORS
 app.use(
@@ -129,17 +129,17 @@ function hoursBetween(dateA: Date, dateB: Date): number {
 //   }
 // });
 
-
 // -------------------------------------------------------
 // GET /api/admin/set-role
 // -------------------------------------------------------
 app.post(
-  "/api/admin/set-role",
+  "/api/admin/set-role/:userId",
   verifyFirebaseToken,
   requireRole("admin"),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { userId, role } = req.body;
+      const userId = req.params.userId;
+      const { role } = req.body;
 
       if (!["parent", "volunteer", "admin"].includes(role)) {
         return res.status(400).json({ error: "Invalid role" });
@@ -161,7 +161,6 @@ app.post(
     }
   }
 );
-
 
 // -------------------------------------------------------
 // GET /api/protected
@@ -313,7 +312,8 @@ app.post(
   requireRole("admin"),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { name, email, phone, role, street, city, state, zipCode } = req.body;
+      const { name, email, phone, role, street, city, state, zipCode } =
+        req.body;
       console.log("Calling api/admin/create-user/ with \n", req.body);
       if (!name || !email || !role) {
         return res.status(400).json({ error: "Missing required fields" });
@@ -351,7 +351,6 @@ app.post(
   }
 );
 
-
 // -------------------------------------------------------
 // POST /api/me
 // Returns current user
@@ -384,7 +383,6 @@ app.get(
   }
 );
 
-
 // -------------------------------------------------------
 // GET /api/users-get-all
 // Returns all users in the system
@@ -395,7 +393,7 @@ app.get(
   verifyFirebaseToken,
   requireRole("admin"),
   async (req: AuthenticatedRequest, res: Response) => {
-    console.log("calling api/users")
+    console.log("calling api/users");
     try {
       // Optional pagination params (future expansion)
       const { limit = 100, offset = 0 } = req.query;
@@ -638,13 +636,18 @@ app.post(
 
 // -------------------------------------------------------
 // Situation 1: Child Check-In (QR Code Scan)
-// POST /api/checkin-qr-code
+// POST /api/checkin/:childId
 // -------------------------------------------------------
 app.post(
-  "/api/checkin",
+  "/api/checkin/:childId",
   verifyFirebaseToken,
   requireRole("volunteer", "admin"),
   async (req: AuthenticatedRequest, res: Response) => {
+    console.log(
+      "calling api/checkin/:childId \nchildId = ",
+      req.params.childId
+    );
+    console.log("Request.params = ", req.params);
     const { childId } = req.params;
     if (!childId)
       return res.status(400).json({ error: "child ID is required" });
@@ -697,10 +700,20 @@ app.post(
           });
         }
 
+        const volunteer = await prisma.user.findUnique({
+          where: { firebaseUid: req.user?.uid },
+        });
+
+        if (!volunteer) {
+          return res
+            .status(404)
+            .json({ error: "Volunteer not found in database" });
+        }
+
         const checkin = await tx.checkin.create({
           data: {
             childId: child.id,
-            volunteerId: req.user?.uid,
+            volunteerId: volunteer.id,
             checkinTime: now,
             checkinDate: new Date(now.toDateString()),
           },
@@ -731,7 +744,7 @@ app.post(
 
         await tx.auditLog.create({
           data: {
-            userId: req.user?.uid,
+            userId: volunteer.id,
             action: "checkin",
             entity: "child",
             entityId: child.id,
@@ -798,9 +811,19 @@ app.post(
           },
         });
 
+        const volunteer = await prisma.user.findUnique({
+          where: { firebaseUid: req.user?.uid },
+        });
+
+        if (!volunteer) {
+          return res
+            .status(404)
+            .json({ error: "Volunteer not found in database" });
+        }
+
         await tx.auditLog.create({
           data: {
-            userId: req.user?.uid,
+            userId: volunteer.id,
             action: "withdraw",
             entity: "child",
             entityId: childId,
@@ -834,6 +857,7 @@ app.post(
   verifyFirebaseToken,
   requireRole("volunteer", "admin"),
   async (req: AuthenticatedRequest, res: Response) => {
+    console.log("Calling api/deposit \nRequest:", req.body);
     const { childId, amountCents } = req.body;
     if (!childId || typeof amountCents !== "number" || amountCents <= 0)
       return res
@@ -866,9 +890,19 @@ app.post(
           },
         });
 
+        const volunteer = await prisma.user.findUnique({
+          where: { firebaseUid: req.user?.uid },
+        });
+
+        if (!volunteer) {
+          return res
+            .status(404)
+            .json({ error: "Volunteer not found in database" });
+        }
+
         await tx.auditLog.create({
           data: {
-            userId: req.user?.uid,
+            userId: volunteer.id,
             action: "deposit",
             entity: "child",
             entityId: childId,
@@ -1187,6 +1221,7 @@ app.get(
   verifyFirebaseToken,
   requireRole("admin"),
   async (req: Request, res: Response) => {
+    console.log("Called api/admin/parent/:parentId: \n", req.params.parentId);
     const parentId = req.params.parentId;
     if (!parentId)
       return res.status(400).json({ error: "parentId is required" });
@@ -1203,7 +1238,7 @@ app.get(
       });
 
       if (!parent) return res.status(404).json({ error: "Parent not found" });
-
+      console.log("Found Parent: ", parent);
       return res.json({ parent });
     } catch (err) {
       console.error("GET /api/admin/parent/:id error", err);
@@ -1213,7 +1248,7 @@ app.get(
 );
 
 // -------------------------------------------------------
-// POST /api/parents
+// GET /api/parents
 // Returns all parents
 // -------------------------------------------------------
 app.get(
@@ -1240,6 +1275,327 @@ app.get(
   }
 );
 
+// -------------------------------------------------------
+// POST /api/checkins
+// Returns all checkins
+// -------------------------------------------------------
+app.get(
+  "/api/admin/checkins",
+  verifyFirebaseToken,
+  requireRole("admin"),
+  async (req, res) => {
+    try {
+      const { from, to } = req.query;
+
+      if (!from || !to) {
+        return res.status(400).json({ error: "from and to are required" });
+      }
+
+      const fromDate = new Date(from as string);
+      const toDate = new Date(to as string);
+
+      const data = await prisma.checkin.findMany({
+        where: {
+          checkinTime: { gte: fromDate, lte: toDate },
+        },
+        include: {
+          child: {
+            include: {
+              parent: true,
+              balance: true,
+            },
+          },
+        },
+        orderBy: { checkinTime: "desc" },
+      });
+
+      const mapped = data.map((entry) => {
+        const child = entry.child;
+        const age = computeAge(child.dateOfBirth);
+        const address = [
+          entry.child.parent.street,
+          entry.child.parent.city,
+          entry.child.parent.state,
+          entry.child.parent.zipCode,
+        ]
+          .filter(Boolean)
+          .join(", ");
+        return {
+          id: entry.id,
+          checkinTime: entry.checkinTime,
+          childName: child.name,
+          age,
+          address,
+          parentName: child.parent?.name ?? "",
+          timesCheckedIn: child.timesCheckedIn,
+        };
+      });
+
+      res.json({ data: mapped });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
+// -------------------------------------------------------
+// POST /api/checkins/export
+// Create a CSV export of checkins
+// -------------------------------------------------------
+app.get(
+  "/api/admin/checkins/export",
+  verifyFirebaseToken,
+  requireRole("admin"),
+  async (req, res) => {
+    try {
+      const { from, to } = req.query;
+
+      const data = await prisma.checkin.findMany({
+        where: {
+          checkinTime: {
+            gte: new Date(from as string),
+            lte: new Date(to as string),
+          },
+        },
+        include: {
+          child: {
+            include: { parent: true },
+          },
+        },
+      });
+
+      const rows = data.map((c) => {
+        const age = computeAge(c.child.dateOfBirth);
+        const address = [
+          c.child.parent.street,
+          c.child.parent.city,
+          c.child.parent.state,
+          c.child.parent.zipCode,
+        ]
+          .filter(Boolean)
+          .join(", ");
+
+        return [
+          c.checkinTime.toISOString(),
+          c.child.name,
+          age,
+          address ?? "",
+          c.child.parent?.name ?? "",
+          c.child.timesCheckedIn,
+        ];
+      });
+
+      const headers = [
+        "CheckinTime",
+        "Name",
+        "Age",
+        "Address",
+        "ParentName",
+        "TimesCheckedIn",
+      ];
+
+      const csv = [headers, ...rows].map((r) => r.join(",")).join("\n");
+
+      res.setHeader("Content-Type", "text/csv");
+      res.send(csv);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
+// -------------------------------------------------------
+// POST /api/users/staff
+// Returns all staff (admins and volunteers)
+// -------------------------------------------------------
+app.get(
+  "/api/users/staff",
+  verifyFirebaseToken,
+  requireRole("admin", "volunteer"),
+  async (req, res) => {
+    const users = await prisma.user.findMany({
+      where: {
+        role: { in: ["admin", "volunteer"] },
+      },
+      orderBy: { name: "asc" },
+    });
+
+    res.json(users);
+  }
+);
+
+// -------------------------------------------------------
+// POST /api/admin/create-qr-codes
+// Returns all staff (admins and volunteers)
+// -------------------------------------------------------
+app.post(
+  "/api/admin/create-qr-codes",
+  verifyFirebaseToken,
+  requireRole("admin", "volunteer"),
+  async (req, res) => {
+    try {
+      const { count } = req.body;
+
+      // Validate input
+      if (
+        typeof count !== "number" ||
+        !Number.isInteger(count) ||
+        count <= 0 ||
+        count > 1000
+      ) {
+        return res.status(400).json({
+          error: "count must be a positive integer (max 1000)",
+        });
+      }
+
+      // Generate QR code records
+      const codes = Array.from({ length: count }).map(() => ({
+        code: nanoid(),
+      }));
+
+      // Insert in bulk
+      await prisma.qrCode.createMany({
+        data: codes,
+        skipDuplicates: true,
+      });
+
+      return res.json({
+        message: `${count} QR codes created`,
+        count,
+      });
+    } catch (err) {
+      console.error("Create QR codes error:", err);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
+// -------------------------------------------------------
+// GET /api/admin/qr-codes
+// Returns all staff (admins and volunteers)
+// -------------------------------------------------------
+app.get(
+  "/api/admin/qr-codes/all",
+  verifyFirebaseToken,
+  requireRole("admin", "volunteer"),
+  async (req: Request, res: Response) => {
+    try {
+      const qrCodes = await prisma.qrCode.findMany({
+        orderBy: { createdAt: "desc" },
+        include: {
+          child: {
+            select: {
+              id: true,
+              name: true,
+              parent: {
+                select: {
+                  name: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      return res.json({
+        qrCodes: qrCodes.map((code) => ({
+          id: code.id,
+          code: code.code,
+          printed: code.printed,
+          associatedChild: code.child
+            ? {
+                id: code.child.id,
+                name: code.child.name,
+              }
+            : null,
+        })),
+      });
+    } catch (err) {
+      console.error("Failed to fetch QR codes:", err);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
+// -------------------------------------------------------
+// POST /api/admin/qr-codes/print
+// Returns all staff (admins and volunteers)
+// -------------------------------------------------------
+app.post(
+  "/api/admin/qr-codes/print",
+  verifyFirebaseToken,
+  requireRole("admin", "volunteer"),
+  async (req, res) => {
+    console.log("Printing PDF with: ", req);
+    try {
+      const { ids } = req.body as { ids: string[] };
+
+      if (!ids || !Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: "No QR codes provided" });
+      }
+
+      const doc = new PDFDocument({
+        size: "LETTER",
+        margin: 36,
+      });
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="qr-codes.pdf"`);
+      doc.pipe(res);
+
+      const cardWidth = 3.375 * 72;
+      const cardHeight = 2.125 * 72;
+      const cols = 2;
+      const rows = 4;
+      const marginX = 36;
+      const marginY = 36;
+
+      for (let i = 0; i < ids.length; i += cols * rows) {
+        const frontCodes = ids.slice(i, i + cols * rows);
+
+        // FRONT PAGE
+        for (let index = 0; index < frontCodes.length; index++) {
+          const code = frontCodes[index];
+          const col = index % cols;
+          const row = Math.floor(index / cols);
+          const x = marginX + col * cardWidth;
+          const y = marginY + row * cardHeight;
+
+          const qrDataUrl = await QRCode.toDataURL(code);
+          doc.image(qrDataUrl, x, y, {
+            width: cardWidth / 2,
+            height: cardHeight,
+          });
+          doc.rect(x, y, cardWidth, cardHeight).stroke();
+        }
+
+        // BACK PAGE
+        doc.addPage();
+        for (let index = 0; index < frontCodes.length; index++) {
+          const col = index % cols;
+          const row = Math.floor(index / cols);
+          const x = marginX + col * cardWidth;
+          const y = marginY + row * cardHeight;
+
+          doc
+            .moveTo(x, y + cardHeight / 2)
+            .lineTo(x + cardWidth, y + cardHeight / 2)
+            .stroke();
+          doc.rect(x, y, cardWidth, cardHeight).stroke();
+        }
+
+        if (i + cols * rows < ids.length) doc.addPage();
+      }
+
+      doc.end();
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to generate PDF" });
+    }
+  }
+);
 
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
